@@ -14,6 +14,10 @@ class DuplicateEmail(Exception):
     """The unique index on the e-mail fired under a race the use case's own check did not see."""
 
 
+class DuplicateStudentCode(Exception):
+    """The unique index on the student code fired: another account carries that code."""
+
+
 class UserStore(Protocol):
     def find_by_key(self, idempotency_key: str) -> User | None: ...
 
@@ -23,7 +27,8 @@ class UserStore(Protocol):
 
     def create(self, user: User, idempotency_key: str) -> tuple[User, bool]:
         """Stores the user and its key in ONE transaction. Returns (user, True), or (the user the
-        key created first, False) when the key was taken. Raises DuplicateEmail."""
+        key created first, False) when the key was taken. Raises DuplicateEmail or
+        DuplicateStudentCode."""
 
     def page(self, role: str | None, q: str | None, page: int, limit: int) -> tuple[list[User], int]:
         """Newest first, one page, and the total count."""

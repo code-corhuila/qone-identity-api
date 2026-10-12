@@ -21,6 +21,7 @@ from identity.application.port.inbound.identity import (
 from identity.application.port.outbound.ports import (
     Clock,
     DuplicateEmail,
+    DuplicateStudentCode,
     IdGenerator,
     ServiceTokenStore,
     TokenSigner,
@@ -76,6 +77,8 @@ class IdentityService(IdentityUseCases):
             stored, created = self._users.create(user, idempotency_key)
         except DuplicateEmail:
             raise _email_taken() from None
+        except DuplicateStudentCode:
+            raise BusinessRuleViolation("an account with this student code already exists") from None
         return Registered(self._authenticate(stored), created)
 
     def login(self, command: Login) -> Authenticated:

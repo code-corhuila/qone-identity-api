@@ -66,6 +66,12 @@ class TestRegister:
                 Register("Laura Dos", "LAURA.GOMEZ@uni.edu.co", "Qampus2026!", "202300003", "X Y", 1), KEY
             )
 
+    def test_a_used_student_code_is_a_business_rule_violation(self, world):
+        _, _, _, _, service_ = world
+        with pytest.raises(BusinessRuleViolation) as caught:
+            service_.register(Register("Otra Persona", "otra@uni.edu.co", "Qampus2026!", "202110342", "X Y", 1), KEY)
+        assert "student code" in str(caught.value)
+
     @pytest.mark.parametrize("key", ["", "short", "k" * 129])
     def test_the_key_is_bounded(self, world, key):
         _, _, _, _, service_ = world

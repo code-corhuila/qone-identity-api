@@ -3,7 +3,7 @@ PostgreSQL adapter must keep: a key used once, a unique e-mail, newest first."""
 
 from uuid import UUID
 
-from identity.application.port.outbound.ports import DuplicateEmail
+from identity.application.port.outbound.ports import DuplicateEmail, DuplicateStudentCode
 from identity.domain.model.service_token import ServiceToken
 from identity.domain.model.user import User
 
@@ -29,6 +29,8 @@ class InMemoryUserStore:
             return earlier, False
         if self.find_by_email(user.email) is not None:
             raise DuplicateEmail()
+        if user.student_code and any(u.student_code == user.student_code for u in self._users.values()):
+            raise DuplicateStudentCode()
         self._users[user.id] = user
         self._keys[idempotency_key] = user.id
         return user, True

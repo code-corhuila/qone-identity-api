@@ -1,0 +1,246 @@
+openapi: 3.0.3
+info:
+  title: qone-identity-api
+  version: 2.0.0
+  description: |
+    Identity domain of Qampus (ADR-006): users, roles, credentials, the RS256 key pair and token
+    issuance for people and for services. Operations ID-01..ID-07 of `../../endpoint-catalog.md`.
+    Conventions and shared components: `./_shared.yaml`, `../../guidelines.md`; token rules:
+    `../../authentication.md`. Data: `06-data/models.md`, schema `identity`.
+
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Through qone-api-gateway
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+  - name: users
+  - name: service-tokens
+
+paths:
+  /identity/health:
+    get:
+      tags: [auth]
+      summary: Liveness of the identity service (ID-01)
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: './_shared.yaml#/components/schemas/Health' }
+
+  /identity/auth/register:
+    post:
+      tags: [auth]
+      summary: Create a STUDENT account and sign it in (ID-02)
+      description: |
+        Self-registration creates students only; professors and admins are seeded or created by
+        an ADMIN. The e-mail is unique: a second account with the same e-mail is
+        `422 BUSINESS_RULE_VIOLATION`. Replaying the same `Idempotency-Key` returns the account
+        created the first time with `200` and a fresh token.
+      security: []
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/IdempotencyKey'
+        - $ref: './_shared.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created and signed in
+          headers:
+            Location: { $ref: './_shared.yaml#/components/headers/Location' }
+            X-Correlation-Id: { $ref: './_shared.yaml#/components/headers/XCorrelationId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '200':
+          description: Same `Idempotency-Key` as an earlier registration - the existing account
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '422': { $ref: './_shared.yaml#/components/responses/BusinessRuleViolation' }
+
+  /identity/auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange e-mail and password for an RS256 token (ID-03)
+      description: |
+        Wrong e-mail or password is `401 UNAUTHORIZED` with the same neutral message for both,
+        so the response does not reveal which accounts exist.
+      security: []
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+
+  /identity/users/me:
+    get:
+      tags: [users]
+      summary: The signed-in user (ID-04)
+      responses:
+        '200':
+          description: The user behind the token's `sub`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+
+  /identity/users:
+    get:
+      tags: [users]
+      summary: List users, newest first (ID-05)
+      description: ADMIN only. `role` filters by role; `q` matches name or e-mail (case-insensitive prefix).
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/Page'
+        - $ref: './_shared.yaml#/components/parameters/Limit'
+        - name: role
+          in: query
+          schema: { $ref: './_shared.yaml#/components/schemas/Role' }
+        - name: q
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        '200':
+          description: A page of users
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserPage' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+        '403': { $ref: './_shared.yaml#/components/responses/Forbidden' }
+
+  /identity/users/{id}:
+    get:
+      tags: [users]
+      summary: One user by id (ID-06)
+      description: ADMIN, or a SERVICE token (catalog snapshots the professor's name when a section is created).
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/Id'
+      responses:
+        '200':
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+        '403': { $ref: './_shared.yaml#/components/responses/Forbidden' }
+        '404': { $ref: './_shared.yaml#/components/responses/NotFound' }
+
+  /identity/service-tokens:
+    post:
+      tags: [service-tokens]
+      summary: Issue a service token for qone-workflow or qone-worker (ID-07)
+      description: |
+        ADMIN only; used once per environment to produce the `SERVICE_TOKEN` secret of `qa` and
+        `main` (5.9.2). The token carries `role: SERVICE` and `sub` equal to the service name.
+        The token value is returned once and never stored in clear.
+      parameters:
+        - $ref: './_shared.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [service]
+              properties:
+                service: { type: string, enum: [qone-workflow, qone-worker, qone-advisor-api] }
+                ttlHours: { type: integer, minimum: 1, maximum: 8760, default: 720 }
+      responses:
+        '201':
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceToken' }
+        '200':
+          description: Same `Idempotency-Key` - the token issued the first time (its value is not repeated; only metadata)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceToken' }
+        '400': { $ref: './_shared.yaml#/components/responses/BadRequest' }
+        '401': { $ref: './_shared.yaml#/components/responses/Unauthorized' }
+        '403': { $ref: './_shared.yaml#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth: { $ref: './_shared.yaml#/components/securitySchemes/bearerAuth' }
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [name, email, password, studentCode, program]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 120 }
+        password: { type: string, format: password, minLength: 8, maxLength: 128 }
+        studentCode: { type: string, pattern: '^[0-9]{6,20}$' }
+        program: { type: string, minLength: 2, maxLength: 80 }
+        semester: { type: integer, minimum: 1, maximum: 12, default: 1 }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+
+    User:
+      type: object
+      description: Public representation; the password hash never leaves identity-db
+      required: [id, email, name, role, createdAt]
+      properties:
+        id: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { $ref: './_shared.yaml#/components/schemas/Role' }
+        studentCode: { type: string, nullable: true, description: Students only }
+        program: { type: string, nullable: true }
+        semester: { type: integer, nullable: true }
+        createdAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }
+
+    UserPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/User' }
+        meta: { $ref: './_shared.yaml#/components/schemas/PageMeta' }
+
+    AuthResponse:
+      type: object
+      required: [token, expiresAt, user]
+      properties:
+        token: { type: string, description: RS256 JWT, 8 hours }
+        expiresAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }
+        user: { $ref: '#/components/schemas/User' }
+
+    ServiceToken:
+      type: object
+      required: [id, service, expiresAt, createdAt]
+      properties:
+        id: { $ref: './_shared.yaml#/components/schemas/UUID' }
+        service: { type: string, example: qone-workflow }
+        token: { type: string, nullable: true, description: Present only in the `201` response }
+        expiresAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }
+        createdAt: { $ref: './_shared.yaml#/components/schemas/DateTime' }

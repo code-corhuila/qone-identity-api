@@ -65,6 +65,9 @@ class PostgresUserStore:
     def create(self, user: User, idempotency_key: str) -> tuple[User, bool]:
         try:
             with self._pool.connection() as conn, conn.transaction():
+                # The key first: a retry of the same intention returns the first row instead of
+                # tripping over a unique index its own first attempt filled.
+                _claim_key(conn, idempotency_key, "app_user", user.id)
                 try:
                     conn.execute(
                         f"INSERT INTO identity.app_user ({USER_COLUMNS}) "
@@ -86,7 +89,6 @@ class PostgresUserStore:
                     if cause.diag.constraint_name == "ux_app_user_student_code":
                         raise DuplicateStudentCode() from cause
                     raise DuplicateEmail() from cause
-                _claim_key(conn, idempotency_key, "app_user", user.id)
         except _KeyAlreadyUsed:
             earlier = self.find_by_key(idempotency_key)
             assert earlier is not None
@@ -134,11 +136,11 @@ class PostgresServiceTokenStore:
     def create(self, token: ServiceToken, idempotency_key: str) -> tuple[ServiceToken, bool]:
         try:
             with self._pool.connection() as conn, conn.transaction():
+                _claim_key(conn, idempotency_key, "service_token", token.id)
                 conn.execute(
                     f"INSERT INTO identity.service_token ({TOKEN_COLUMNS}) VALUES (%s, %s, %s, %s, %s, %s)",
                     (token.id, token.service, token.token_hash, token.expires_at, token.revoked_at, token.created_at),
                 )
-                _claim_key(conn, idempotency_key, "service_token", token.id)
         except _KeyAlreadyUsed:
             earlier = self.find_by_key(idempotency_key)
             assert earlier is not None

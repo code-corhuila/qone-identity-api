@@ -66,6 +66,13 @@ Integration tests against the real schema (Annex C) run only when `TEST_DATABASE
 TEST_DATABASE_URL=postgresql://identity:password@localhost:5432/identity python -m pytest tests/test_postgres_integration.py
 ```
 
+Container image and compose (`deploy/`, Annex G): `docker build -f deploy/Dockerfile -t
+qone-identity-api:dev .`, then `deploy/smoke.sh` against the running container (health, the
+envelope on 401 and 404, the correlation header); `ci.yml` builds and smoke-checks the image and
+runs the integration tests against `qone-identity-db` migrated on a fresh PostgreSQL.
+`deploy/compose.yml` is what `qone-infra` includes: `expose` only, after `identity-db` is
+healthy, with the private key mounted read-only from `JWT_PRIVATE_KEY_PATH`.
+
 Explicit limits (norm 5.3.10), declared in `apps/api/factory.py`:
 
 | Limit | Value |

@@ -1,0 +1,78 @@
+name: CI
+on:
+  pull_request:
+    branches: [develop, qa, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Domain, use-case, HTTP and architecture tests (integration only with TEST_DATABASE_URL)
+        run: python -m pytest
+
+  integration:
+    # The real engine with the schema of qone-identity-db (Annex C). The schema is cloned from the
+    # sibling repository; while its develop has no migrations yet, the job reports it and skips.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build-and-test
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_DB: identity
+          POSTGRES_USER: identity
+          POSTGRES_PASSWORD: identity
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U identity -d identity" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Fetch the schema of qone-identity-db
+        run: git clone --depth 1 --branch ${IDENTITY_DB_REF:-develop} https://github.com/code-corhuila/qone-identity-db.git /tmp/identity-db
+      - name: Migrate (with a throwaway demo password hash) and run the integration tests
+        run: |
+          if [ ! -d /tmp/identity-db/migrations ]; then
+            echo "::notice::qone-identity-db has no migrations on ${IDENTITY_DB_REF:-develop} yet; integration tests skipped"
+            exit 0
+          fi
+          HASH=$(python /tmp/identity-db/scripts/hash-password.py ci-demo-password)
+          docker run --rm --network host -v /tmp/identity-db:/workspace -e FLYWAY_PLACEHOLDERS_DEMO_PASSWORD_HASH="$HASH" flyway/flyway:10.22.0 \
+            -workingDirectory=/workspace -configFiles=/workspace/flyway.toml \
+            -url=jdbc:postgresql://localhost:5432/identity -user=identity -password=identity migrate
+          TEST_DATABASE_URL=postgresql://identity:identity@localhost:5432/identity python -m pytest tests/test_postgres_integration.py -v
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f deploy/Dockerfile -t qone-identity-api:ci .
+      - name: Run it with a throwaway key over the in-memory people, then smoke-check it
+        run: |
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/jwt-private.pem 2>/dev/null
+          chmod 644 /tmp/jwt-private.pem
+          docker run -d --rm --name identity-ci -p 8009:8000 -e DEMO_PASSWORD=ci-demo-password \
+            -e JWT_PRIVATE_KEY_FILE=/run/secrets/jwt-private.pem \
+            -v /tmp/jwt-private.pem:/run/secrets/jwt-private.pem:ro qone-identity-api:ci
+          for i in $(seq 1 30); do curl -fs http://localhost:8009/api/v1/identity/health && break; sleep 1; done
+          sh deploy/smoke.sh http://localhost:8009
+          docker stop identity-ci

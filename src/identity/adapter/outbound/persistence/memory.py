@@ -63,3 +63,12 @@ class InMemoryServiceTokenStore:
         self._tokens[token.id] = token
         self._keys[idempotency_key] = token.id
         return token, True
+
+
+class InMemoryProbe:
+    """The ready probe of a service without a database: the in-memory store is always there."""
+
+    name = "database"
+
+    def ping(self) -> None:
+        return None

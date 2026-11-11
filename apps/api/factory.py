@@ -10,9 +10,10 @@ from datetime import UTC, datetime, timedelta
 from identity.adapter.inbound.http.app import create_app
 from identity.adapter.inbound.http.auth import TokenVerifier
 from identity.adapter.outbound.jwt.rs256 import Rs256Signer
-from identity.adapter.outbound.persistence.memory import InMemoryServiceTokenStore, InMemoryUserStore
+from identity.adapter.outbound.persistence.memory import InMemoryProbe, InMemoryServiceTokenStore, InMemoryUserStore
 from identity.adapter.outbound.runtime import SystemClock, Uuid4Generator
 from identity.application.usecase.identity import IdentityService
+from identity.application.usecase.readiness import CheckReadiness
 
 # Explicit limits (norm 5.3.10, Annex C), declared here with their values.
 DB_POOL_MAX = 10
@@ -20,6 +21,7 @@ DB_WAIT_SECONDS = 5.0
 DB_STATEMENT_TIMEOUT_MS = 5000
 HTTP_KEEP_ALIVE_SECONDS = 60
 HTTP_GRACEFUL_SHUTDOWN_SECONDS = 20
+READY_TIMEOUT_SECONDS = 2.0  # deadline of the ready probe (connection and SELECT 1)
 
 
 class Settings:
@@ -47,18 +49,25 @@ def build_app(settings: Settings | None = None):
     log = logging.getLogger("identity")
     signer = Rs256Signer(settings.private_key)
     if settings.database_url and settings.database_url != "memory":
-        from identity.adapter.outbound.persistence.postgres import PostgresServiceTokenStore, PostgresUserStore, connect
+        from identity.adapter.outbound.persistence.postgres import (
+            PostgresProbe,
+            PostgresServiceTokenStore,
+            PostgresUserStore,
+            connect,
+        )
 
         pool = connect(settings.database_url, DB_POOL_MAX, DB_WAIT_SECONDS, DB_STATEMENT_TIMEOUT_MS)
         users, tokens = PostgresUserStore(pool), PostgresServiceTokenStore(pool)
+        probe = PostgresProbe(pool, READY_TIMEOUT_SECONDS)
         log.info("store: postgresql (pool max %s, statement timeout %s ms)", DB_POOL_MAX, DB_STATEMENT_TIMEOUT_MS)
     else:
         if not settings.demo_password:
             raise SystemExit("DEMO_PASSWORD is required with the in-memory store (development only)")
         users, tokens = InMemoryUserStore(_demo_people(settings.demo_password)), InMemoryServiceTokenStore()
+        probe = InMemoryProbe()
         log.warning("store: in memory with the demo people (IDENTITY_DATABASE_URL not set); development only")
     service = IdentityService(users, tokens, signer, SystemClock(), Uuid4Generator(), settings.token_lifetime)
-    return create_app(service, TokenVerifier(signer.public_key_pem()))
+    return create_app(service, TokenVerifier(signer.public_key_pem()), CheckReadiness([probe]))
 
 
 def _demo_people(password: str):

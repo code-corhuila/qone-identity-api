@@ -3,6 +3,8 @@
 a used key rolls back and returns the row the key created first; the unique index on the
 e-mail surfaces as DuplicateEmail."""
 
+import threading
+from concurrent.futures import Future
 from datetime import UTC
 from uuid import UUID
 
@@ -172,3 +174,38 @@ def _token(row: dict) -> ServiceToken:
         revoked_at=row["revoked_at"].astimezone(UTC) if row["revoked_at"] else None,
         created_at=row["created_at"].astimezone(UTC),
     )
+
+
+class PostgresProbe:
+    """`SELECT 1` through the pool within a short deadline (HU-PLT-004): a database that does not
+    answer makes the service not ready instead of hanging the probe. The pool bounds the wait for a
+    connection, but a query on a pooled connection whose engine stopped answering (paused,
+    partitioned) would block until TCP gives up; so the check runs on a daemon thread and the probe
+    waits for it at most `timeout_seconds`. The next probes share a check still pending instead of
+    starting another one: at most one thread is ever stuck."""
+
+    name = "database"
+
+    def __init__(self, pool: ConnectionPool, timeout_seconds: float = 2.0) -> None:
+        self._pool = pool
+        self._timeout = timeout_seconds
+        self._lock = threading.Lock()
+        self._pending: Future | None = None
+
+    def ping(self) -> None:
+        with self._lock:
+            if self._pending is None or self._pending.done():
+                self._pending = Future()
+                check = threading.Thread(target=self._select_one, args=(self._pending,), name="probe", daemon=True)
+                check.start()
+            pending = self._pending
+        pending.result(timeout=self._timeout)  # TimeoutError when the engine does not answer in time
+
+    def _select_one(self, outcome: Future) -> None:
+        try:
+            with self._pool.connection(timeout=self._timeout) as conn:
+                conn.execute("SELECT 1")
+        except Exception as error:  # noqa: BLE001 - handed to the waiting probe as is
+            outcome.set_exception(error)
+        else:
+            outcome.set_result(None)

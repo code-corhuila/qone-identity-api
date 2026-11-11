@@ -91,11 +91,24 @@ Explicit limits (norm 5.3.10), declared in `apps/api/factory.py`:
 | Statement timeout | 5 s |
 | Keep-alive | 60 s |
 | Graceful shutdown | 20 s |
+| Ready probe | 2 s deadline (connection and `SELECT 1`) |
 | Header read | imposed by the gateway (NGINX `client_header_timeout`) |
 
 Every log line is JSON with the `traceId` of the request (norm 5.3.9); the detail of a 500
 goes there, never to the client. `scripts/sync-contracts.sh [ref]` refreshes the contract
 copies in `contracts/openapi/` from `qone-docs` with the GitHub CLI.
+
+Health (HU-PLT-004): `GET /api/v1/identity/health` is liveness (the process answers) and
+`GET /api/v1/identity/health/ready` is readiness: `SELECT 1` through the pool within a 2 s
+deadline (a hung query included) answers 200 `{"status":"ready","service":...,"checks":{"database":"ok"}}`;
+a database that does not answer gives 503 with the common envelope (`SERVICE_UNAVAILABLE`).
+Both are public. Over the in-memory store the ready probe always answers ok.
+
+Metrics (HU-OBS-001): `GET /metrics` at the root of the container (outside `/api/v1`, never
+routed by the gateway) answers the Prometheus text format with
+`http_server_requests_total{service,method,route,status_class}` and
+`http_server_request_duration_seconds{service,method,route}`; `route` is the matched route
+template (`unmatched` otherwise) and the scrape itself is not counted.
 
 ## Branching
 

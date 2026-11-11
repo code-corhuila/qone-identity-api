@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from identity.adapter.outbound.persistence.memory import InMemoryServiceTokenStore, InMemoryUserStore
-from identity.application.errors import AuthenticationFailed, Forbidden, NotFound
+from identity.application.errors import AuthenticationFailed, Forbidden, IdempotencyKeyReused, NotFound
 from identity.application.port.inbound.caller import Caller, TokenRole
 from identity.application.port.inbound.identity import IssueServiceToken, Login, Register
 from identity.application.usecase.identity import IdentityService
@@ -19,6 +19,7 @@ admin = Caller(str(PATRICIA.id), TokenRole.ADMIN, "Patricia Mora")
 laura = Caller(str(LAURA.id), TokenRole.STUDENT, "Laura Gómez")
 professor = Caller(str(CARLOS.id), TokenRole.PROFESSOR, "Carlos Ramírez")
 service = Caller("qone-workflow", TokenRole.SERVICE, "qone-workflow")
+other_admin = Caller("33333333-3333-4333-8333-333333333332", TokenRole.ADMIN, "Otra Admin")
 KEY = "register-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"
 NEW = Register(
     "Nuevo Estudiante", "Nuevo.Estudiante@uni.edu.co", "Qampus2026!", "202300001", "Ingeniería de Software", 1
@@ -40,6 +41,19 @@ def claims_of(token: str) -> dict:
     return json.loads(token.removeprefix("signed:"))
 
 
+class RacingUserStore(InMemoryUserStore):
+    """Lookups that miss what a concurrent request has just written: only the claim of the key in
+    create() sees it, as with two identical requests racing over PostgreSQL."""
+
+    stale = False
+
+    def find_by_key(self, owner: str, key: str):
+        return None if self.stale else super().find_by_key(owner, key)
+
+    def find_by_email(self, email: str):
+        return None if self.stale else super().find_by_email(email)
+
+
 class TestRegister:
     def test_a_student_is_created_and_signed_in_for_eight_hours(self, world):
         users, _, _, clock, service_ = world
@@ -52,12 +66,39 @@ class TestRegister:
         assert claims["sub"] == str(user.id) and claims["role"] == "STUDENT" and claims["name"] == "Nuevo Estudiante"
         assert result.auth.expires_at == clock.now() + timedelta(hours=8)
 
-    def test_a_replayed_key_returns_the_same_account_with_a_fresh_token(self, world):
+    def test_a_replay_of_the_same_request_returns_the_same_account_with_a_fresh_token(self, world):
         _, _, signer, _, service_ = world
         first = service_.register(NEW, KEY)
-        again = service_.register(Register("Other", "other@uni.edu.co", "Qampus2026!", "202300002", "X Y", 2), KEY)
+        again = service_.register(NEW, KEY)
         assert again.created is False and again.auth.user == first.auth.user
         assert len(signer.signed) == 2, "a fresh token each time; the account is the first one"
+
+    def test_another_person_replaying_the_key_with_another_body_gets_no_token(self, world):
+        users, _, signer, _, service_ = world
+        first = service_.register(NEW, KEY)
+        other = Register("Otra Persona", "otra@uni.edu.co", "Qampus2027!", "202300002", "X Y", 2)
+        with pytest.raises(IdempotencyKeyReused):
+            service_.register(other, KEY)
+        assert len(signer.signed) == 1, "only the first registration was signed"
+        assert users.find_by_email("otra@uni.edu.co") is None and users.find(first.auth.user.id) == first.auth.user
+
+    def test_the_same_body_with_another_password_gets_no_token(self, world):
+        _, _, signer, _, service_ = world
+        service_.register(NEW, KEY)
+        with pytest.raises(IdempotencyKeyReused):
+            service_.register(Register(**{**NEW.__dict__, "password": "Qampus2027!"}), KEY)
+        assert len(signer.signed) == 1, "a replay never signs in without the account's password"
+
+    def test_the_key_taken_by_a_concurrent_request_is_checked_the_same_way(self, world):
+        _, _, signer, _, _ = world
+        racing = RacingUserStore(list(SEED))
+        service_ = IdentityService(racing, InMemoryServiceTokenStore(), signer, FixedClock(), SequenceIds())
+        service_.register(NEW, KEY)
+        racing.stale = True  # the lookups miss the first row; the claim in create() finds the key taken
+        with pytest.raises(IdempotencyKeyReused):
+            service_.register(Register(**{**NEW.__dict__, "password": "Qampus2027!"}), KEY)
+        again = service_.register(NEW, KEY)
+        assert again.created is False and len(signer.signed) == 2
 
     def test_a_used_email_is_a_business_rule_violation(self, world):
         _, _, _, _, service_ = world
@@ -184,7 +225,24 @@ class TestServiceTokens:
         assert issued.service_token.expires_at == clock.now() + timedelta(hours=720)
         again = service_.issue_service_token(admin, IssueServiceToken("qone-workflow", 720), "svc-key-0001")
         assert again.created is False and again.token is None and again.service_token == issued.service_token
-        assert tokens.find_by_key("svc-key-0001") == issued.service_token
+        assert tokens.find_by_key(admin.subject, "svc-key-0001").resource == issued.service_token
+
+    def test_another_admin_with_the_same_key_gets_its_own_token_never_the_first_one(self, world):
+        _, tokens, _, _, service_ = world
+        first = service_.issue_service_token(admin, IssueServiceToken("qone-workflow", 720), "svc-key-0004")
+        second = service_.issue_service_token(other_admin, IssueServiceToken("qone-workflow", 720), "svc-key-0004")
+        assert second.created is True and second.token is not None
+        assert second.service_token.id != first.service_token.id
+        assert tokens.find_by_key(other_admin.subject, "svc-key-0004").resource == second.service_token
+
+    def test_the_same_admin_reusing_the_key_for_another_request_is_refused(self, world):
+        _, _, signer, _, service_ = world
+        service_.issue_service_token(admin, IssueServiceToken("qone-workflow", 720), "svc-key-0005")
+        with pytest.raises(IdempotencyKeyReused):
+            service_.issue_service_token(admin, IssueServiceToken("qone-worker", 720), "svc-key-0005")
+        with pytest.raises(IdempotencyKeyReused):
+            service_.issue_service_token(admin, IssueServiceToken("qone-workflow", 24), "svc-key-0005")
+        assert len(signer.signed) == 1
 
     def test_the_service_and_the_ttl_are_validated_before_signing(self, world):
         _, _, signer, _, service_ = world

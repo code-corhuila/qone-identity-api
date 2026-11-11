@@ -12,9 +12,10 @@ from fastapi.testclient import TestClient
 from identity.adapter.inbound.http.app import create_app
 from identity.adapter.inbound.http.auth import TokenVerifier
 from identity.adapter.outbound.jwt.rs256 import Rs256Signer
-from identity.adapter.outbound.persistence.memory import InMemoryServiceTokenStore, InMemoryUserStore
+from identity.adapter.outbound.persistence.memory import InMemoryProbe, InMemoryServiceTokenStore, InMemoryUserStore
 from identity.adapter.outbound.runtime import SystemClock, Uuid4Generator
 from identity.application.usecase.identity import IdentityService
+from identity.application.usecase.readiness import CheckReadiness
 from tests.fakes import SEED
 
 
@@ -45,8 +46,9 @@ def bearer(sub: str, role: str, name: str = "", **kw) -> dict[str, str]:
     return {"Authorization": f"Bearer {mint(sub, role, name, **kw)}"}
 
 
-def make_client() -> TestClient:
+def make_client(readiness: CheckReadiness | None = None) -> TestClient:
     service = IdentityService(
         InMemoryUserStore(list(SEED)), InMemoryServiceTokenStore(), SIGNER, SystemClock(), Uuid4Generator()
     )
-    return TestClient(create_app(service, TokenVerifier(PUBLIC_PEM)), raise_server_exceptions=False)
+    readiness = readiness or CheckReadiness([InMemoryProbe()])
+    return TestClient(create_app(service, TokenVerifier(PUBLIC_PEM), readiness), raise_server_exceptions=False)

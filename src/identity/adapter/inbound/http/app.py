@@ -11,6 +11,7 @@ from identity.adapter.inbound.http import errors
 from identity.adapter.inbound.http.auth import TokenVerifier
 from identity.adapter.inbound.http.router import router
 from identity.application.port.inbound.identity import IdentityUseCases
+from identity.application.usecase.readiness import CheckReadiness
 
 SERVICE = "qone-identity-api"
 VERSION = "2.0.0"
@@ -19,10 +20,11 @@ CORRELATION_HEADER = "X-Correlation-Id"
 access = logging.getLogger("identity.access")
 
 
-def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier) -> FastAPI:
+def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier, readiness: CheckReadiness) -> FastAPI:
     app = FastAPI(title=SERVICE, version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.use_cases = use_cases
     app.state.verifier = verifier
+    app.state.readiness = readiness
     app.state.service = SERVICE
     app.state.version = VERSION
 

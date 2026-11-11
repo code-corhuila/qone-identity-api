@@ -172,3 +172,18 @@ def _token(row: dict) -> ServiceToken:
         revoked_at=row["revoked_at"].astimezone(UTC) if row["revoked_at"] else None,
         created_at=row["created_at"].astimezone(UTC),
     )
+
+
+class PostgresProbe:
+    """`SELECT 1` through the pool with a short wait for a connection (HU-PLT-004): a database that
+    does not answer makes the service not ready instead of hanging the probe."""
+
+    name = "database"
+
+    def __init__(self, pool: ConnectionPool, timeout_seconds: float = 2.0) -> None:
+        self._pool = pool
+        self._timeout = timeout_seconds
+
+    def ping(self) -> None:
+        with self._pool.connection(timeout=self._timeout) as conn:
+            conn.execute("SELECT 1")

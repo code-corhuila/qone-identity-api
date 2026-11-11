@@ -103,3 +103,9 @@ def test_a_retry_of_the_same_key_returns_the_first_user_even_against_the_unique_
     retry = new_user("it-retry@uni.edu.co", "202300041")  # same e-mail and code: would trip the indexes
     again, created = users.create(retry, "it-key-retry-0001")
     assert created is False and again == first
+
+
+def test_the_ready_probe_answers_against_the_real_engine(pool):
+    from identity.adapter.outbound.persistence.postgres import PostgresProbe
+
+    PostgresProbe(pool, timeout_seconds=2.0).ping()

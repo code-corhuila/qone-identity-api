@@ -66,6 +66,12 @@ def health(request: Request):
     return {"status": "ok", "service": request.app.state.service, "version": request.app.state.version}
 
 
+@router.get("/health/ready")
+def ready(request: Request):
+    checks = request.app.state.readiness.check()
+    return {"status": "ready", "service": request.app.state.service, "checks": checks}
+
+
 @router.post("/auth/register")
 def register(body: RegisterBody, service: UseCases, request: Request):
     key = idempotency_key_of(request)

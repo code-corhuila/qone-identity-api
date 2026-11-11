@@ -1,5 +1,6 @@
 """The FastAPI application of the identity service: correlation and access log (norm 5.3.9),
-the error envelope, the routes. `create_app` receives the ports already built."""
+the RED metrics and `/metrics` (HU-OBS-001), the error envelope, the routes. `create_app`
+receives the ports already built."""
 
 import logging
 import time
@@ -7,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 
-from identity.adapter.inbound.http import errors
+from identity.adapter.inbound.http import errors, metrics
 from identity.adapter.inbound.http.auth import TokenVerifier
 from identity.adapter.inbound.http.router import router
 from identity.application.port.inbound.identity import IdentityUseCases
@@ -51,6 +52,7 @@ def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier, readiness: 
         )
         return response
 
+    metrics.install(app, SERVICE)
     errors.install(app)
     app.include_router(router)
     return app

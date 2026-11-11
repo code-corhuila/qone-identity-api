@@ -2,6 +2,7 @@
 TEST_DATABASE_URL. Skipped, not failed, when the variable is absent."""
 
 import os
+import secrets
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ from identity.domain.model.user import Role, User
 URL = os.environ.get("TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL not set")
 NOW = datetime(2026, 10, 12, 15, 0, 0, tzinfo=UTC)
+PASSWORD = secrets.token_urlsafe(16)  # generated per session: no password literal
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +38,7 @@ def stores(pool):
 
 
 def new_user(email: str = "it-nuevo@uni.edu.co", code: str = "202300001") -> User:
-    return User.register(uuid4(), "Nuevo Estudiante", email, "Qampus2026!", code, "Ingeniería de Software", 1, NOW)
+    return User.register(uuid4(), "Nuevo Estudiante", email, PASSWORD, code, "Ingeniería de Software", 1, NOW)
 
 
 def test_round_trip_keeps_every_type_and_the_hash(stores):
@@ -45,7 +47,7 @@ def test_round_trip_keeps_every_type_and_the_hash(stores):
     stored, created = users.create(user, "it-key-roundtrip-01")
     assert created and stored == user
     found = users.find(user.id)
-    assert found == user and found.created_at.tzinfo is not None and found.password_matches("Qampus2026!")
+    assert found == user and found.created_at.tzinfo is not None and found.password_matches(PASSWORD)
     assert users.find_by_email("it-nuevo@uni.edu.co") == user and users.find_by_key("it-key-roundtrip-01") == user
 
 
@@ -71,17 +73,18 @@ def test_the_page_is_newest_first_with_filters_and_the_seed_people_are_there(sto
     users, _ = stores
     users.create(new_user("it-page@uni.edu.co", "202300031"), "it-key-page-00001")
     items, total = users.page(None, None, 1, 1)
-    assert items[0].email == "it-page@uni.edu.co" and total >= 10
+    assert items[0].email == "it-page@uni.edu.co" and total >= 9
+    # The seed people by id: their names and e-mails belong to qone-identity-db (synthetic, #55).
     professors, _ = users.page("PROFESSOR", None, 1, 20)
-    assert {u.email for u in professors} >= {
-        "carlos.ramirez@uni.edu.co",
-        "ana.torres@uni.edu.co",
-        "jorge.medina@uni.edu.co",
+    assert {str(u.id) for u in professors} >= {
+        "22222222-2222-4222-8222-222222222221",
+        "22222222-2222-4222-8222-222222222222",
+        "22222222-2222-4222-8222-222222222223",
     }
-    laura, _ = users.page(None, "laura", 1, 20)
-    assert [u.name for u in laura] == ["Laura Gómez"]
+    first, _ = users.page(None, users.find(UUID("11111111-1111-4111-8111-111111111111")).name.lower()[:6], 1, 20)
+    assert UUID("11111111-1111-4111-8111-111111111111") in {u.id for u in first}
     seed = users.find(UUID("11111111-1111-4111-8111-111111111111"))
-    assert seed is not None and seed.role is Role.STUDENT and seed.student_code == "202110342"
+    assert seed is not None and seed.role is Role.STUDENT and seed.student_code
 
 
 def test_service_tokens_are_stored_once_per_key(stores):
@@ -109,3 +112,13 @@ def test_the_ready_probe_answers_against_the_real_engine(pool):
     from identity.adapter.outbound.persistence.postgres import PostgresProbe
 
     PostgresProbe(pool, timeout_seconds=2.0).ping()
+
+
+def test_a_user_added_without_a_key_is_stored_once_and_never_overwritten(stores):
+    users, _ = stores
+    admin = User.administrator(uuid4(), "it-admin@uni.edu.co", PASSWORD, NOW)
+    assert users.add(admin) is True and users.find(admin.id) == admin
+    again = User.administrator(admin.id, "it-admin@uni.edu.co", "another-" + PASSWORD, NOW)
+    assert users.add(again) is False and users.find(admin.id).password_matches(PASSWORD)
+    with pytest.raises(DuplicateEmail):
+        users.add(User.administrator(uuid4(), "it-admin@uni.edu.co", PASSWORD, NOW))

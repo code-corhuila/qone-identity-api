@@ -5,7 +5,7 @@ the same verification every other service performs with JWT_PUBLIC_KEY."""
 import jwt
 import pytest
 
-from tests.fakes import CARLOS, DEMO_PASSWORD, LAURA, PATRICIA
+from tests.fakes import CARLOS, LAURA, PASSWORD, PATRICIA
 from tests.http_support import OTHER_PRIVATE_PEM, PUBLIC_PEM, bearer, make_client, mint
 
 BASE = "/api/v1/identity"
@@ -13,7 +13,7 @@ KEY = {"Idempotency-Key": "register-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"}
 NEW = {
     "name": "Nuevo Estudiante",
     "email": "Nuevo.Estudiante@uni.edu.co",
-    "password": "Qampus2026!",
+    "password": PASSWORD,
     "studentCode": "202300001",
     "program": "Ingeniería de Software",
     "semester": 1,
@@ -121,7 +121,7 @@ class TestRegister:
 
 class TestLogin:
     def test_the_right_password_returns_a_token_and_the_user(self, client):
-        r = client.post(f"{BASE}/auth/login", json={"email": "laura.gomez@uni.edu.co", "password": DEMO_PASSWORD})
+        r = client.post(f"{BASE}/auth/login", json={"email": "laura.gomez@uni.edu.co", "password": PASSWORD})
         assert r.status_code == 200
         body = r.json()
         assert body["user"]["id"] == str(LAURA.id) and body["expiresAt"].endswith("Z")
@@ -131,7 +131,7 @@ class TestLogin:
         "body",
         [
             {"email": "laura.gomez@uni.edu.co", "password": "wrong"},
-            {"email": "nobody@uni.edu.co", "password": DEMO_PASSWORD},
+            {"email": "nobody@uni.edu.co", "password": PASSWORD},
         ],
     )
     def test_a_wrong_password_and_an_unknown_email_look_the_same(self, client, body):

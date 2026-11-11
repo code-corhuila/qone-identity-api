@@ -72,7 +72,8 @@ class Page:
 
 class IdentityUseCases(Protocol):
     def register(self, command: Register, idempotency_key: str) -> Registered:
-        """ID-02, public. Students only; a used e-mail is a BusinessRuleViolation; replay by key."""
+        """ID-02, public. Students only; a used e-mail is a BusinessRuleViolation. A replayed key
+        returns the account only for the same body and its password, else IdempotencyKeyReused."""
 
     def login(self, command: Login) -> Authenticated:
         """ID-03, public. AuthenticationFailed for an unknown e-mail or a wrong password alike."""
@@ -89,4 +90,5 @@ class IdentityUseCases(Protocol):
     def issue_service_token(
         self, caller: Caller, command: IssueServiceToken, idempotency_key: str
     ) -> IssuedServiceToken:
-        """ID-07, ADMIN. The token value is returned once; a replay returns the metadata."""
+        """ID-07, ADMIN. The token value is returned once; a replay of the same admin and body
+        returns the metadata; the same key with another body is IdempotencyKeyReused."""

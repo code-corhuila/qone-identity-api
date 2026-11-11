@@ -39,7 +39,12 @@ tests/                       domain, use cases, HTTP, contract, architecture, po
   account with the same e-mail is a business rule violation.
 - Login failures answer the same neutral 401 for an unknown e-mail and a wrong password.
 - User tokens live 8 hours; `SERVICE` exists only in tokens, with the service name as `sub`.
-- Every creation is idempotent by `Idempotency-Key` (norm 5.3.8).
+- Every creation is idempotent by `Idempotency-Key` (norm 5.3.8). The key belongs to its owner
+  (`code-corhuila/qone-docs#55`), which is the ADMIN who issues a service token or `anonymous`
+  for the public registration. It stands for one request, kept as a SHA-256 of the canonical
+  body. The same key with another body answers `422 IDEMPOTENCY_KEY_REUSED`. A registration
+  replay also has to prove the account's password before it gets a token, so knowing a key never
+  signs anybody in. Needs `qone-identity-db` V010.
 
 ## How to run it
 

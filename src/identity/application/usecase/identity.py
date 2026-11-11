@@ -1,11 +1,16 @@
 """The operations of the identity service (ID-02..ID-07) over the ports. Authorization by role
 happens here (07-api/authentication.md access matrix); input bounds carry the contract's field
-names so the HTTP adapter only translates."""
+names so the HTTP adapter only translates.
+
+An Idempotency-Key belongs to its owner (code-corhuila/qone-docs#55): the ADMIN who issues a
+service token, or ANONYMOUS for the public registration. A replay returns the first result only
+when it carries the same request; a registration replay must also prove the account's password,
+so a known key never signs anybody in."""
 
 from datetime import timedelta
 from uuid import UUID
 
-from identity.application.errors import AuthenticationFailed, Forbidden, NotFound
+from identity.application.errors import AuthenticationFailed, Forbidden, IdempotencyKeyReused, NotFound
 from identity.application.port.inbound.caller import Caller, TokenRole
 from identity.application.port.inbound.identity import (
     MAX_LIMIT,
@@ -19,6 +24,7 @@ from identity.application.port.inbound.identity import (
     Registered,
 )
 from identity.application.port.outbound.ports import (
+    Claimed,
     Clock,
     DuplicateEmail,
     DuplicateStudentCode,
@@ -29,6 +35,7 @@ from identity.application.port.outbound.ports import (
 )
 from identity.domain.model.credentials import hash_password, verify_password
 from identity.domain.model.errors import BusinessRuleViolation, FieldError, ValidationError
+from identity.domain.model.idempotency import ANONYMOUS, IdempotencyKey, fingerprint_of
 from identity.domain.model.service_token import ServiceToken
 from identity.domain.model.token import USER_TOKEN_LIFETIME, TokenClaims
 from identity.domain.model.user import Role, User
@@ -58,9 +65,10 @@ class IdentityService(IdentityUseCases):
 
     def register(self, command: Register, idempotency_key: str) -> Registered:
         _check_key(idempotency_key)
-        earlier = self._users.find_by_key(idempotency_key)
+        key = IdempotencyKey(ANONYMOUS, idempotency_key, fingerprint_of(_registration(command)))
+        earlier = self._users.find_by_key(key.owner, key.key)
         if earlier is not None:
-            return Registered(self._authenticate(earlier), created=False)
+            return self._replayed_registration(earlier, key, command.password)
         user = User.register(
             user_id=self._ids.new_id(),
             name=command.name,
@@ -74,12 +82,14 @@ class IdentityService(IdentityUseCases):
         if self._users.find_by_email(user.email) is not None:
             raise _email_taken()
         try:
-            stored, created = self._users.create(user, idempotency_key)
+            stored, created = self._users.create(user, key)
         except DuplicateEmail:
             raise _email_taken() from None
         except DuplicateStudentCode:
             raise BusinessRuleViolation("an account with this student code already exists") from None
-        return Registered(self._authenticate(stored), created)
+        if not created:  # a concurrent request with the same key won the claim: same checks as a replay
+            return self._replayed_registration(stored, key, command.password)
+        return Registered(self._authenticate(stored.resource), created=True)
 
     def login(self, command: Login) -> Authenticated:
         email = command.email.strip().lower() if isinstance(command.email, str) else ""
@@ -127,21 +137,51 @@ class IdentityService(IdentityUseCases):
     ) -> IssuedServiceToken:
         _require(caller, TokenRole.ADMIN)
         _check_key(idempotency_key)
-        earlier = self._service_tokens.find_by_key(idempotency_key)
+        request = {"service": command.service, "ttlHours": command.ttl_hours}
+        key = IdempotencyKey(caller.subject, idempotency_key, fingerprint_of(request))
+        earlier = self._service_tokens.find_by_key(key.owner, key.key)
         if earlier is not None:
-            return IssuedServiceToken(earlier, token=None, created=False)
+            return _replayed_service_token(earlier, key)
         now = self._clock.now()
         # The aggregate validates the service and the lifetime before anything is signed.
         probe = ServiceToken.issue(self._ids.new_id(), command.service, command.ttl_hours, "", now)
         claims = TokenClaims.for_service(command.service, now, probe.expires_at - probe.created_at)
         token = self._signer.sign(claims)
         record = ServiceToken.issue(probe.id, command.service, command.ttl_hours, token, now)
-        stored, created = self._service_tokens.create(record, idempotency_key)
-        return IssuedServiceToken(stored, token=token if created else None, created=created)
+        stored, created = self._service_tokens.create(record, key)
+        if not created:
+            return _replayed_service_token(stored, key)
+        return IssuedServiceToken(stored.resource, token=token, created=True)
+
+    def _replayed_registration(self, earlier: Claimed[User], key: IdempotencyKey, password: str) -> Registered:
+        """The same request AND the account's password, or no token: the fingerprint leaves the
+        password out (an unsalted SHA-256 of it would weaken the PBKDF2 hash), so the password is
+        proven against the stored hash. Both are always checked, whichever fails first."""
+        proven = earlier.resource.password_matches(password if isinstance(password, str) else "")
+        if not (key.same_request(earlier.fingerprint) and proven):
+            raise IdempotencyKeyReused()
+        return Registered(self._authenticate(earlier.resource), created=False)
 
     def _authenticate(self, user: User) -> Authenticated:
         claims = TokenClaims.for_user(user, self._clock.now(), self._lifetime)
         return Authenticated(user=user, token=self._signer.sign(claims), expires_at=claims.expires_at)
+
+
+def _registration(command: Register) -> dict:
+    """The canonical registration request without the password (see _replayed_registration)."""
+    return {
+        "name": command.name,
+        "email": command.email,
+        "studentCode": command.student_code,
+        "program": command.program,
+        "semester": command.semester,
+    }
+
+
+def _replayed_service_token(earlier: Claimed[ServiceToken], key: IdempotencyKey) -> IssuedServiceToken:
+    if not key.same_request(earlier.fingerprint):
+        raise IdempotencyKeyReused()
+    return IssuedServiceToken(earlier.resource, token=None, created=False)
 
 
 def _check_key(idempotency_key: str) -> None:

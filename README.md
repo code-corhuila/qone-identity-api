@@ -39,7 +39,12 @@ tests/                       domain, use cases, HTTP, contract, architecture, po
   account with the same e-mail is a business rule violation.
 - Login failures answer the same neutral 401 for an unknown e-mail and a wrong password.
 - User tokens live 8 hours; `SERVICE` exists only in tokens, with the service name as `sub`.
-- Every creation is idempotent by `Idempotency-Key` (norm 5.3.8).
+- Every creation is idempotent by `Idempotency-Key` (norm 5.3.8). The key belongs to its owner
+  (`code-corhuila/qone-docs#55`), which is the ADMIN who issues a service token or `anonymous`
+  for the public registration. It stands for one request, kept as a SHA-256 of the canonical
+  body. The same key with another body answers `422 IDEMPOTENCY_KEY_REUSED`. A registration
+  replay also has to prove the account's password before it gets a token, so knowing a key never
+  signs anybody in. Needs `qone-identity-db` V010.
 
 ## How to run it
 
@@ -55,8 +60,18 @@ python -m apps.api                                 # http://localhost:8000/api/v
 The private key is the one `qone-infra/scripts/dev-keys.sh` writes to `keys/jwt-private.pem`;
 it is mounted into this service alone, and the public half the script writes to the `.env` is
 what every other service validates with. Without `IDENTITY_DATABASE_URL` the service starts
-over an in-memory store with the nine demo people and the password of `DEMO_PASSWORD`
-(development only; it says so in the log). With it, the store is `qone-identity-db`: start that
+over an in-memory store with the eight synthetic demo people (`estudiante.01..05@qampus.test`,
+`profesor.01..03@qampus.test`) and the password of `DEMO_PASSWORD`, the one in `qone-infra/.env`.
+This is allowed only with `APP_ENV=develop`; any other `APP_ENV` refuses to start.
+
+**ADMIN by bootstrap (`code-corhuila/qone-docs#55`).** No seed carries the administrator. On every
+start the service creates it with the id `33333333-3333-4333-8333-333333333331` from
+`BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`, hashed then. If the account exists it is
+kept and its password is never overwritten. In `develop` the e-mail defaults to `admin@qampus.test`,
+and an empty password skips the bootstrap with a warning. Outside `develop` both are required, and
+the password must have at least 12 characters and differ from `DEMO_PASSWORD`. Otherwise the
+service logs `refusing to start: <variable> ...` (never the value) and exits before opening a
+connection. No password is a literal in this repository: the tests generate theirs per session. With it, the store is `qone-identity-db`: start that
 repository's compose, run its Flyway runner with the demo password hash placeholder, and point
 the URL at it.
 
@@ -65,6 +80,16 @@ Integration tests against the real schema (Annex C) run only when `TEST_DATABASE
 ```bash
 TEST_DATABASE_URL=postgresql://identity:password@localhost:5432/identity python -m pytest tests/test_postgres_integration.py
 ```
+
+Quality gates of `ci.yml` (HU-PLT-005), all blocking:
+
+- **Coverage floor: 85 %** of the lines of `src/` (measured 86 % when the gate was set,
+  integration tests skipped). The CI command is
+  `python -m pytest --cov=src --cov-report=term --cov-fail-under=85`; raise the floor here and
+  in `ci.yml` together, never lower it.
+- **Dependency audit:** `pip install pip-audit && pip-audit --skip-editable` over the installed
+  environment.
+- **Secret scan:** gitleaks `v8.21.2` over the whole history (`detect --redact`).
 
 Container image and compose (`deploy/`, Annex G): `docker build -f deploy/Dockerfile -t
 qone-identity-api:dev .`, then `deploy/smoke.sh` against the running container (health, the
@@ -81,11 +106,24 @@ Explicit limits (norm 5.3.10), declared in `apps/api/factory.py`:
 | Statement timeout | 5 s |
 | Keep-alive | 60 s |
 | Graceful shutdown | 20 s |
+| Ready probe | 2 s deadline (connection and `SELECT 1`) |
 | Header read | imposed by the gateway (NGINX `client_header_timeout`) |
 
 Every log line is JSON with the `traceId` of the request (norm 5.3.9); the detail of a 500
 goes there, never to the client. `scripts/sync-contracts.sh [ref]` refreshes the contract
 copies in `contracts/openapi/` from `qone-docs` with the GitHub CLI.
+
+Health (HU-PLT-004): `GET /api/v1/identity/health` is liveness (the process answers) and
+`GET /api/v1/identity/health/ready` is readiness: `SELECT 1` through the pool within a 2 s
+deadline (a hung query included) answers 200 `{"status":"ready","service":...,"checks":{"database":"ok"}}`;
+a database that does not answer gives 503 with the common envelope (`SERVICE_UNAVAILABLE`).
+Both are public. Over the in-memory store the ready probe always answers ok.
+
+Metrics (HU-OBS-001): `GET /metrics` at the root of the container (outside `/api/v1`, never
+routed by the gateway) answers the Prometheus text format with
+`http_server_requests_total{service,method,route,status_class}` and
+`http_server_request_duration_seconds{service,method,route}`; `route` is the matched route
+template (`unmatched` otherwise) and the scrape itself is not counted.
 
 ## Branching
 

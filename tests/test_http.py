@@ -2,18 +2,21 @@
 server in memory. The token the service issues must be accepted by its own verifier, which is
 the same verification every other service performs with JWT_PUBLIC_KEY."""
 
+import secrets
+
 import jwt
 import pytest
 
-from tests.fakes import CARLOS, DEMO_PASSWORD, LAURA, PATRICIA
+from tests.fakes import CARLOS, LAURA, PASSWORD, PATRICIA
 from tests.http_support import OTHER_PRIVATE_PEM, PUBLIC_PEM, bearer, make_client, mint
 
+OTHER_PASSWORD = secrets.token_urlsafe(16)  # generated per session: no password literal (#55)
 BASE = "/api/v1/identity"
 KEY = {"Idempotency-Key": "register-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"}
 NEW = {
     "name": "Nuevo Estudiante",
     "email": "Nuevo.Estudiante@uni.edu.co",
-    "password": "Qampus2026!",
+    "password": PASSWORD,
     "studentCode": "202300001",
     "program": "Ingeniería de Software",
     "semester": 1,
@@ -98,6 +101,20 @@ class TestRegister:
         again = client.post(f"{BASE}/auth/register", json=NEW, headers=KEY)
         assert again.status_code == 200 and again.json()["user"]["id"] == first["user"]["id"]
 
+    def test_another_person_replaying_the_key_is_422_without_a_token_or_the_first_account(self, client):
+        laura_ = client.post(f"{BASE}/auth/register", json=NEW, headers=KEY).json()
+        santiago_ = {**NEW, "name": "Santiago Nuevo", "email": "santiago.nuevo@uni.edu.co", "studentCode": "202300002"}
+        r = client.post(f"{BASE}/auth/register", json={**santiago_, "password": OTHER_PASSWORD}, headers=KEY)
+        body = r.json()
+        assert r.status_code == 422 and body["error"] == "IDEMPOTENCY_KEY_REUSED"
+        assert {"error", "message", "traceId"} <= body.keys() and "token" not in body
+        assert laura_["user"]["id"] not in r.text and laura_["user"]["email"] not in r.text
+
+    def test_the_same_key_and_body_with_another_password_is_422_without_a_token(self, client):
+        client.post(f"{BASE}/auth/register", json=NEW, headers=KEY)
+        r = client.post(f"{BASE}/auth/register", json={**NEW, "password": OTHER_PASSWORD}, headers=KEY)
+        assert r.status_code == 422 and r.json()["error"] == "IDEMPOTENCY_KEY_REUSED" and "token" not in r.json()
+
     def test_a_used_email_is_422(self, client):
         r = client.post(f"{BASE}/auth/register", json={**NEW, "email": "LAURA.GOMEZ@uni.edu.co"}, headers=KEY)
         assert r.status_code == 422 and r.json()["error"] == "BUSINESS_RULE_VIOLATION"
@@ -121,7 +138,7 @@ class TestRegister:
 
 class TestLogin:
     def test_the_right_password_returns_a_token_and_the_user(self, client):
-        r = client.post(f"{BASE}/auth/login", json={"email": "laura.gomez@uni.edu.co", "password": DEMO_PASSWORD})
+        r = client.post(f"{BASE}/auth/login", json={"email": "laura.gomez@uni.edu.co", "password": PASSWORD})
         assert r.status_code == 200
         body = r.json()
         assert body["user"]["id"] == str(LAURA.id) and body["expiresAt"].endswith("Z")
@@ -131,7 +148,7 @@ class TestLogin:
         "body",
         [
             {"email": "laura.gomez@uni.edu.co", "password": "wrong"},
-            {"email": "nobody@uni.edu.co", "password": DEMO_PASSWORD},
+            {"email": "nobody@uni.edu.co", "password": PASSWORD},
         ],
     )
     def test_a_wrong_password_and_an_unknown_email_look_the_same(self, client, body):
@@ -221,3 +238,19 @@ class TestServiceTokens:
             ).status_code
             == 403
         )
+
+    def test_two_admins_with_the_same_key_each_get_their_own_token(self, client):
+        headers = {"Idempotency-Key": "svc-token-0004"}
+        first = client.post(f"{BASE}/service-tokens", json={"service": "qone-workflow"}, headers={**admin(), **headers})
+        other = bearer("33333333-3333-4333-8333-333333333332", "ADMIN", "Otra Admin")
+        second = client.post(f"{BASE}/service-tokens", json={"service": "qone-workflow"}, headers={**other, **headers})
+        assert first.status_code == 201 and second.status_code == 201
+        assert second.json()["id"] != first.json()["id"] and second.json()["token"] is not None
+
+    def test_the_same_admin_reusing_the_key_for_another_service_is_422(self, client):
+        headers = {**admin(), "Idempotency-Key": "svc-token-0005"}
+        assert (
+            client.post(f"{BASE}/service-tokens", json={"service": "qone-workflow"}, headers=headers).status_code == 201
+        )
+        r = client.post(f"{BASE}/service-tokens", json={"service": "qone-worker"}, headers=headers)
+        assert r.status_code == 422 and r.json()["error"] == "IDEMPOTENCY_KEY_REUSED" and "token" not in r.json()

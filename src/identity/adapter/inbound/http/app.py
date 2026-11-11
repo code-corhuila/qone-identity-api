@@ -1,5 +1,6 @@
 """The FastAPI application of the identity service: correlation and access log (norm 5.3.9),
-the error envelope, the routes. `create_app` receives the ports already built."""
+the RED metrics and `/metrics` (HU-OBS-001), the error envelope, the routes. `create_app`
+receives the ports already built."""
 
 import logging
 import time
@@ -7,10 +8,11 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 
-from identity.adapter.inbound.http import errors
+from identity.adapter.inbound.http import errors, metrics
 from identity.adapter.inbound.http.auth import TokenVerifier
 from identity.adapter.inbound.http.router import router
 from identity.application.port.inbound.identity import IdentityUseCases
+from identity.application.usecase.readiness import CheckReadiness
 
 SERVICE = "qone-identity-api"
 VERSION = "2.0.0"
@@ -19,10 +21,11 @@ CORRELATION_HEADER = "X-Correlation-Id"
 access = logging.getLogger("identity.access")
 
 
-def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier) -> FastAPI:
+def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier, readiness: CheckReadiness) -> FastAPI:
     app = FastAPI(title=SERVICE, version=VERSION, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.use_cases = use_cases
     app.state.verifier = verifier
+    app.state.readiness = readiness
     app.state.service = SERVICE
     app.state.version = VERSION
 
@@ -49,6 +52,7 @@ def create_app(use_cases: IdentityUseCases, verifier: TokenVerifier) -> FastAPI:
         )
         return response
 
+    metrics.install(app, SERVICE)
     errors.install(app)
     app.include_router(router)
     return app

@@ -1,0 +1,17 @@
+# gitleaks configuration (HU-PLT-005, code-corhuila/qone-docs#55): the default rules plus the
+# OpenAI key, which the platform's advisor uses and which no repository may ever carry.
+# The whole key is the secret (secretGroup = 1): with the prefix as the captured group, gitleaks
+# would measure the entropy of `proj-` alone and let a real key pass.
+# CI runs: gitleaks detect --source /repo --config /repo/.gitleaks.toml --redact --verbose
+title = "qone-identity-api"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "openai-api-key"
+description = "OpenAI API key (project, service account, admin or legacy)"
+regex = '''\b(sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+entropy = 3
+keywords = ["sk-"]

@@ -32,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Secret scan (gitleaks)
-        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 detect --source /repo --redact --verbose
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 detect --source /repo --config /repo/.gitleaks.toml --redact --verbose
 
   integration:
     # The real engine with the schema of qone-identity-db (Annex C). The schema is cloned from the
@@ -65,7 +65,7 @@ jobs:
             echo "::notice::qone-identity-db has no migrations on ${IDENTITY_DB_REF:-develop} yet; integration tests skipped"
             exit 0
           fi
-          HASH=$(python /tmp/identity-db/scripts/hash-password.py ci-demo-password)
+          HASH=$(python /tmp/identity-db/scripts/hash-password.py "$(openssl rand -hex 16)")
           docker run --rm --network host -v /tmp/identity-db:/workspace -e FLYWAY_PLACEHOLDERS_DEMO_PASSWORD_HASH="$HASH" flyway/flyway:10.22.0 \
             -workingDirectory=/workspace -configFiles=/workspace/flyway.toml \
             -url=jdbc:postgresql://localhost:5432/identity -user=identity -password=identity migrate
@@ -83,7 +83,8 @@ jobs:
         run: |
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/jwt-private.pem 2>/dev/null
           chmod 644 /tmp/jwt-private.pem
-          docker run -d --rm --name identity-ci -p 8009:8000 -e DEMO_PASSWORD=ci-demo-password \
+          # A throwaway demo password generated per run: none is written in the repository (#55).
+          docker run -d --rm --name identity-ci -p 8009:8000 -e APP_ENV=develop -e DEMO_PASSWORD="$(openssl rand -hex 16)" \
             -e JWT_PRIVATE_KEY_FILE=/run/secrets/jwt-private.pem \
             -v /tmp/jwt-private.pem:/run/secrets/jwt-private.pem:ro qone-identity-api:ci
           for i in $(seq 1 30); do curl -fs http://localhost:8009/api/v1/identity/health && break; sleep 1; done

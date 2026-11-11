@@ -136,6 +136,30 @@ class PostgresUserStore:
             ).fetchall()
         return [_user(r) for r in rows], int(total)
 
+    def add(self, user: User) -> bool:
+        # A row with this id wins and is never overwritten: two replicas starting together add once.
+        try:
+            with self._pool.connection() as conn, conn.transaction():
+                added = conn.execute(
+                    f"INSERT INTO identity.app_user ({USER_COLUMNS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING RETURNING id",
+                    (
+                        user.id,
+                        user.email,
+                        user.name,
+                        user.password_hash,
+                        user.role.value,
+                        user.student_code,
+                        user.program,
+                        user.semester,
+                        user.created_at,
+                        user.updated_at,
+                    ),
+                ).fetchone()
+        except psycopg.errors.UniqueViolation as cause:
+            raise DuplicateEmail() from cause
+        return added is not None
+
     def _one(self, sql: str, params: tuple) -> User | None:
         with self._pool.connection() as conn:
             row = conn.execute(sql, params).fetchone()

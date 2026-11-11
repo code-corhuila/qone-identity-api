@@ -47,6 +47,14 @@ class InMemoryUserStore:
         start = (page - 1) * limit
         return rows[start : start + limit], len(rows)
 
+    def add(self, user: User) -> bool:
+        if user.id in self._users:
+            return False
+        if self.find_by_email(user.email) is not None:
+            raise DuplicateEmail()
+        self._users[user.id] = user
+        return True
+
 
 class InMemoryServiceTokenStore:
     def __init__(self) -> None:

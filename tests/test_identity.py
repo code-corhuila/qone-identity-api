@@ -1,6 +1,7 @@
 """Core level (Annex C): the use cases over the in-memory stores and fakes of the ports."""
 
 import json
+import secrets
 from datetime import timedelta
 from uuid import UUID, uuid4
 
@@ -13,17 +14,16 @@ from identity.application.port.inbound.identity import IssueServiceToken, Login,
 from identity.application.usecase.identity import IdentityService
 from identity.domain.model.errors import BusinessRuleViolation, ValidationError
 from identity.domain.model.user import Role
-from tests.fakes import CARLOS, DEMO_PASSWORD, LAURA, PATRICIA, SANTIAGO, SEED, FakeSigner, FixedClock, SequenceIds
+from tests.fakes import CARLOS, LAURA, PASSWORD, PATRICIA, SANTIAGO, SEED, FakeSigner, FixedClock, SequenceIds
 
 admin = Caller(str(PATRICIA.id), TokenRole.ADMIN, "Patricia Mora")
 laura = Caller(str(LAURA.id), TokenRole.STUDENT, "Laura Gómez")
 professor = Caller(str(CARLOS.id), TokenRole.PROFESSOR, "Carlos Ramírez")
 service = Caller("qone-workflow", TokenRole.SERVICE, "qone-workflow")
 other_admin = Caller("33333333-3333-4333-8333-333333333332", TokenRole.ADMIN, "Otra Admin")
+OTHER_PASSWORD = secrets.token_urlsafe(16)  # generated per session: no password literal (#55)
 KEY = "register-6f1d2c3e-9b7a-4e1f-8c2d-0a1b2c3d4e5f"
-NEW = Register(
-    "Nuevo Estudiante", "Nuevo.Estudiante@uni.edu.co", "Qampus2026!", "202300001", "Ingeniería de Software", 1
-)
+NEW = Register("Nuevo Estudiante", "Nuevo.Estudiante@uni.edu.co", PASSWORD, "202300001", "Ingeniería de Software", 1)
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ class TestRegister:
     def test_another_person_replaying_the_key_with_another_body_gets_no_token(self, world):
         users, _, signer, _, service_ = world
         first = service_.register(NEW, KEY)
-        other = Register("Otra Persona", "otra@uni.edu.co", "Qampus2027!", "202300002", "X Y", 2)
+        other = Register("Otra Persona", "otra@uni.edu.co", OTHER_PASSWORD, "202300002", "X Y", 2)
         with pytest.raises(IdempotencyKeyReused):
             service_.register(other, KEY)
         assert len(signer.signed) == 1, "only the first registration was signed"
@@ -86,7 +86,7 @@ class TestRegister:
         _, _, signer, _, service_ = world
         service_.register(NEW, KEY)
         with pytest.raises(IdempotencyKeyReused):
-            service_.register(Register(**{**NEW.__dict__, "password": "Qampus2027!"}), KEY)
+            service_.register(Register(**{**NEW.__dict__, "password": OTHER_PASSWORD}), KEY)
         assert len(signer.signed) == 1, "a replay never signs in without the account's password"
 
     def test_the_key_taken_by_a_concurrent_request_is_checked_the_same_way(self, world):
@@ -96,21 +96,19 @@ class TestRegister:
         service_.register(NEW, KEY)
         racing.stale = True  # the lookups miss the first row; the claim in create() finds the key taken
         with pytest.raises(IdempotencyKeyReused):
-            service_.register(Register(**{**NEW.__dict__, "password": "Qampus2027!"}), KEY)
+            service_.register(Register(**{**NEW.__dict__, "password": OTHER_PASSWORD}), KEY)
         again = service_.register(NEW, KEY)
         assert again.created is False and len(signer.signed) == 2
 
     def test_a_used_email_is_a_business_rule_violation(self, world):
         _, _, _, _, service_ = world
         with pytest.raises(BusinessRuleViolation):
-            service_.register(
-                Register("Laura Dos", "LAURA.GOMEZ@uni.edu.co", "Qampus2026!", "202300003", "X Y", 1), KEY
-            )
+            service_.register(Register("Laura Dos", "LAURA.GOMEZ@uni.edu.co", PASSWORD, "202300003", "X Y", 1), KEY)
 
     def test_a_used_student_code_is_a_business_rule_violation(self, world):
         _, _, _, _, service_ = world
         with pytest.raises(BusinessRuleViolation) as caught:
-            service_.register(Register("Otra Persona", "otra@uni.edu.co", "Qampus2026!", "202110342", "X Y", 1), KEY)
+            service_.register(Register("Otra Persona", "otra@uni.edu.co", PASSWORD, "202110342", "X Y", 1), KEY)
         assert "student code" in str(caught.value)
 
     @pytest.mark.parametrize("key", ["", "short", "k" * 129])
@@ -137,12 +135,12 @@ class TestRegister:
 class TestLogin:
     def test_the_right_password_signs_in(self, world):
         _, _, _, clock, service_ = world
-        auth = service_.login(Login("Laura.Gomez@uni.edu.co ", DEMO_PASSWORD))
+        auth = service_.login(Login("Laura.Gomez@uni.edu.co ", PASSWORD))
         assert auth.user == LAURA and claims_of(auth.token)["sub"] == str(LAURA.id)
         assert auth.expires_at == clock.now() + timedelta(hours=8)
 
     @pytest.mark.parametrize(
-        "command", [Login("laura.gomez@uni.edu.co", "wrong"), Login("nobody@uni.edu.co", DEMO_PASSWORD), Login("", "")]
+        "command", [Login("laura.gomez@uni.edu.co", "wrong"), Login("nobody@uni.edu.co", PASSWORD), Login("", "")]
     )
     def test_a_wrong_password_and_an_unknown_email_fail_the_same_way(self, world, command):
         _, _, signer, _, service_ = world

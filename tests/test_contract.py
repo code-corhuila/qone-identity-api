@@ -7,7 +7,7 @@ import pytest
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
-from tests.fakes import CARLOS, DEMO_PASSWORD, LAURA, PATRICIA
+from tests.fakes import CARLOS, LAURA, PASSWORD, PATRICIA
 from tests.http_support import bearer, make_client
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "openapi"
@@ -17,7 +17,7 @@ BASE = "/api/v1/identity"
 NEW = {
     "name": "Nuevo Estudiante",
     "email": "nuevo@uni.edu.co",
-    "password": "Qampus2026!",
+    "password": PASSWORD,
     "studentCode": "202300001",
     "program": "Ingeniería de Software",
 }
@@ -63,7 +63,7 @@ def test_health_auth_user_page_and_service_token_match_their_schemas(client):
     assert registered.status_code == 201
     assert_valid(registered.json(), "AuthResponse")
     assert_valid(
-        client.post(f"{BASE}/auth/login", json={"email": LAURA.email, "password": DEMO_PASSWORD}).json(), "AuthResponse"
+        client.post(f"{BASE}/auth/login", json={"email": LAURA.email, "password": PASSWORD}).json(), "AuthResponse"
     )
     assert_valid(client.get(f"{BASE}/users/me", headers=bearer(str(LAURA.id), "STUDENT")).json(), "User")
     assert_valid(client.get(f"{BASE}/users/{CARLOS.id}", headers=bearer(str(PATRICIA.id), "ADMIN")).json(), "User")

@@ -60,8 +60,18 @@ python -m apps.api                                 # http://localhost:8000/api/v
 The private key is the one `qone-infra/scripts/dev-keys.sh` writes to `keys/jwt-private.pem`;
 it is mounted into this service alone, and the public half the script writes to the `.env` is
 what every other service validates with. Without `IDENTITY_DATABASE_URL` the service starts
-over an in-memory store with the nine demo people and the password of `DEMO_PASSWORD`
-(development only; it says so in the log). With it, the store is `qone-identity-db`: start that
+over an in-memory store with the eight synthetic demo people (`estudiante.01..05@qampus.test`,
+`profesor.01..03@qampus.test`) and the password of `DEMO_PASSWORD`, the one in `qone-infra/.env`.
+This is allowed only with `APP_ENV=develop`; any other `APP_ENV` refuses to start.
+
+**ADMIN by bootstrap (`code-corhuila/qone-docs#55`).** No seed carries the administrator. On every
+start the service creates it with the id `33333333-3333-4333-8333-333333333331` from
+`BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`, hashed then. If the account exists it is
+kept and its password is never overwritten. In `develop` the e-mail defaults to `admin@qampus.test`,
+and an empty password skips the bootstrap with a warning. Outside `develop` both are required, and
+the password must have at least 12 characters and differ from `DEMO_PASSWORD`. Otherwise the
+service logs `refusing to start: <variable> ...` (never the value) and exits before opening a
+connection. No password is a literal in this repository: the tests generate theirs per session. With it, the store is `qone-identity-db`: start that
 repository's compose, run its Flyway runner with the demo password hash placeholder, and point
 the URL at it.
 

@@ -1,9 +1,9 @@
 """The User aggregate (06-data/models.md schema identity, contract RegisterRequest).
 
-Pure Python (Annex C). Self-registration creates students only; professors and admins are
-seeded or created by an ADMIN. The e-mail is the login identity, stored lower-case and unique
-(the use case checks it, the database's unique index is the last line). The password is
-hashed at registration and never leaves the aggregate as text."""
+Pure Python (Annex C). Self-registration creates students only; professors are seeded (develop)
+and the ADMIN is created by the service at start from its configuration. The e-mail is the login
+identity, stored lower-case and unique (the use case checks it, the database's unique index is
+the last line). The password is hashed at registration and never leaves the aggregate as text."""
 
 import re
 from dataclasses import dataclass
@@ -16,6 +16,7 @@ from identity.domain.model.errors import FieldError, ValidationError
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STUDENT_CODE_PATTERN = re.compile(r"^[0-9]{6,20}$")
+ADMINISTRATOR_NAME = "Administrador"
 
 
 class Role(StrEnum):
@@ -80,6 +81,32 @@ class User:
             student_code=clean_code,
             program=clean_program,
             semester=semester,
+            created_at=moment,
+            updated_at=moment,
+        )
+
+    @staticmethod
+    def administrator(user_id: UUID, email: str, password: str, now: datetime) -> "User":
+        """The ADMIN the service creates at start from its configuration; no seed carries it
+        (code-corhuila/qone-docs#55). ValidationError names the e-mail and the password."""
+        details: list[FieldError] = []
+        clean_email = email.strip().lower() if isinstance(email, str) else ""
+        if not clean_email or len(clean_email) > 120 or not EMAIL_PATTERN.match(clean_email):
+            details.append(FieldError("email", "must be a valid e-mail of at most 120 characters"))
+        if not isinstance(password, str) or not PASSWORD_MIN <= len(password) <= PASSWORD_MAX:
+            details.append(FieldError("password", f"must have {PASSWORD_MIN} to {PASSWORD_MAX} characters"))
+        if details:
+            raise ValidationError(details)
+        moment = _utc(now)
+        return User(
+            id=user_id,
+            email=clean_email,
+            name=ADMINISTRATOR_NAME,
+            password_hash=hash_password(password),
+            role=Role.ADMIN,
+            student_code=None,
+            program=None,
+            semester=None,
             created_at=moment,
             updated_at=moment,
         )

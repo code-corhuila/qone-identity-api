@@ -1,6 +1,7 @@
 """Fakes of the trivial ports and the seed people for the core and HTTP tests."""
 
 import json
+import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -8,8 +9,9 @@ from identity.domain.model.credentials import hash_password
 from identity.domain.model.token import TokenClaims
 from identity.domain.model.user import Role, User
 
-DEMO_PASSWORD = "Qampus2026!"
-DEMO_HASH = hash_password(DEMO_PASSWORD)  # once per test session: PBKDF2 is deliberately slow
+# Generated per test session: no password is a literal in the repository (code-corhuila/qone-docs#55).
+PASSWORD = secrets.token_urlsafe(16)
+PASSWORD_HASH = hash_password(PASSWORD)  # once per test session: PBKDF2 is deliberately slow
 CREATED_AT = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 
@@ -17,7 +19,7 @@ def person(
     user_id: str, email: str, name: str, role: Role, code: str | None = None, semester: int | None = None
 ) -> User:
     program = "Ingeniería de Software" if role is Role.STUDENT else None
-    return User(UUID(user_id), email, name, DEMO_HASH, role, code, program, semester, CREATED_AT, CREATED_AT)
+    return User(UUID(user_id), email, name, PASSWORD_HASH, role, code, program, semester, CREATED_AT, CREATED_AT)
 
 
 LAURA = person(

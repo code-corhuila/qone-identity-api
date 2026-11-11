@@ -1,0 +1,16 @@
+# gitleaks configuration (HU-PLT-005, code-corhuila/qone-docs#55): the default rules plus the
+# OpenAI key, which the platform's advisor uses and which no repository may ever carry.
+# The id is not the default's `openai-api-key`: with gitleaks v8.21.2 a custom rule under the
+# default's id is ignored (the default regex, which needs the legacy T3BlbkFJ marker, wins), so
+# this one has its own id and both run.
+# CI runs: gitleaks detect --source /repo --config /repo/.gitleaks.toml --redact --verbose
+title = "qone-identity-api"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "openai-api-key-qampus"
+description = "OpenAI API key (project, service account, admin or legacy)"
+regex = '''sk-(proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}'''
+keywords = ["sk-"]

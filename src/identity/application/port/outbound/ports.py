@@ -33,6 +33,10 @@ class UserStore(Protocol):
     def page(self, role: str | None, q: str | None, page: int, limit: int) -> tuple[list[User], int]:
         """Newest first, one page, and the total count."""
 
+    def add(self, user: User) -> bool:
+        """Stores a user that no request created (the ADMIN of the bootstrap): True when stored,
+        False when a row with its id already exists (never overwritten). Raises DuplicateEmail."""
+
 
 class ServiceTokenStore(Protocol):
     def find_by_key(self, idempotency_key: str) -> ServiceToken | None: ...

@@ -1,6 +1,8 @@
 # The identity service as qone-infra composes it (Annex G): expose only, after its database is
 # healthy. The private key is mounted read-only into this service alone (norm 5.9.2); every
-# other value comes from .env.
+# other value comes from .env. APP_ENV decides how strict the start is: outside develop the
+# BOOTSTRAP_ADMIN_* values are required (password of 12+ characters, not the DEMO_PASSWORD) or the
+# service refuses to start; the ADMIN is never seeded (code-corhuila/qone-docs#55).
 services:
   qone-identity-api:
     build:
@@ -14,6 +16,11 @@ services:
       JWT_PRIVATE_KEY_FILE: /run/secrets/jwt-private.pem
       TOKEN_LIFETIME_HOURS: ${TOKEN_LIFETIME_HOURS:-8}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_ENV: ${APP_ENV:?APP_ENV is required (develop, qa or main)}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # Only to refuse an ADMIN password equal to it; with a database no store reads it.
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
     volumes:
       - ${JWT_PRIVATE_KEY_PATH:?JWT_PRIVATE_KEY_PATH is required (qone-infra/keys/jwt-private.pem)}:/run/secrets/jwt-private.pem:ro
     expose:

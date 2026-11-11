@@ -66,6 +66,16 @@ Integration tests against the real schema (Annex C) run only when `TEST_DATABASE
 TEST_DATABASE_URL=postgresql://identity:password@localhost:5432/identity python -m pytest tests/test_postgres_integration.py
 ```
 
+Quality gates of `ci.yml` (HU-PLT-005), all blocking:
+
+- **Coverage floor: 85 %** of the lines of `src/` (measured 86 % when the gate was set,
+  integration tests skipped). The CI command is
+  `python -m pytest --cov=src --cov-report=term --cov-fail-under=85`; raise the floor here and
+  in `ci.yml` together, never lower it.
+- **Dependency audit:** `pip install pip-audit && pip-audit --skip-editable` over the installed
+  environment.
+- **Secret scan:** gitleaks `v8.21.2` over the whole history (`detect --redact`).
+
 Container image and compose (`deploy/`, Annex G): `docker build -f deploy/Dockerfile -t
 qone-identity-api:dev .`, then `deploy/smoke.sh` against the running container (health, the
 envelope on 401 and 404, the correlation header); `ci.yml` builds and smoke-checks the image and
